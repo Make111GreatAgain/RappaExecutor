@@ -91,6 +91,20 @@ _JUSTIFIEDSLOT = _descriptor.Descriptor(
       message_type=None, enum_type=None, containing_type=None,
       is_extension=False, extension_scope=None,
       serialized_options=None, file=DESCRIPTOR,  create_key=_descriptor._internal_create_key),
+    _descriptor.FieldDescriptor(
+      name='uploadSize', full_name='service.JustifiedSlot.uploadSize', index=8,
+      number=9, type=3, cpp_type=2, label=1,
+      has_default_value=False, default_value=0,
+      message_type=None, enum_type=None, containing_type=None,
+      is_extension=False, extension_scope=None,
+      serialized_options=None, file=DESCRIPTOR,  create_key=_descriptor._internal_create_key),
+    _descriptor.FieldDescriptor(
+      name='speed', full_name='service.JustifiedSlot.speed', index=9,
+      number=10, type=1, cpp_type=5, label=1,
+      has_default_value=False, default_value=float(0),
+      message_type=None, enum_type=None, containing_type=None,
+      is_extension=False, extension_scope=None,
+      serialized_options=None, file=DESCRIPTOR,  create_key=_descriptor._internal_create_key),
   ],
   extensions=[
   ],
@@ -104,7 +118,7 @@ _JUSTIFIEDSLOT = _descriptor.Descriptor(
   oneofs=[
   ],
   serialized_start=57,
-  serialized_end=197,
+  serialized_end=232,
 )
 
 
@@ -142,8 +156,8 @@ _HEARTBEATREQUEST_COMMITSENTRY = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=475,
-  serialized_end=521,
+  serialized_start=510,
+  serialized_end=556,
 )
 
 _HEARTBEATREQUEST_JUSTIFIEDSENTRY = _descriptor.Descriptor(
@@ -180,8 +194,8 @@ _HEARTBEATREQUEST_JUSTIFIEDSENTRY = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=523,
-  serialized_end=572,
+  serialized_start=558,
+  serialized_end=607,
 )
 
 _HEARTBEATREQUEST_FINALIZESENTRY = _descriptor.Descriptor(
@@ -218,8 +232,8 @@ _HEARTBEATREQUEST_FINALIZESENTRY = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=574,
-  serialized_end=622,
+  serialized_start=609,
+  serialized_end=657,
 )
 
 _HEARTBEATREQUEST_INVALIDSENTRY = _descriptor.Descriptor(
@@ -256,8 +270,8 @@ _HEARTBEATREQUEST_INVALIDSENTRY = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=624,
-  serialized_end=671,
+  serialized_start=659,
+  serialized_end=706,
 )
 
 _HEARTBEATREQUEST = _descriptor.Descriptor(
@@ -315,8 +329,8 @@ _HEARTBEATREQUEST = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=200,
-  serialized_end=671,
+  serialized_start=235,
+  serialized_end=706,
 )
 
 
@@ -354,8 +368,8 @@ _HEARTBEATRESPONSE_NODESTATUSENTRY = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=805,
-  serialized_end=854,
+  serialized_start=840,
+  serialized_end=889,
 )
 
 _HEARTBEATRESPONSE = _descriptor.Descriptor(
@@ -399,8 +413,8 @@ _HEARTBEATRESPONSE = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=674,
-  serialized_end=854,
+  serialized_start=709,
+  serialized_end=889,
 )
 
 
@@ -459,8 +473,8 @@ _VOTE = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=856,
-  serialized_end=941,
+  serialized_start=891,
+  serialized_end=976,
 )
 
 
@@ -533,8 +547,8 @@ _SCHEDULEREQUEST = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=944,
-  serialized_end=1089,
+  serialized_start=979,
+  serialized_end=1124,
 )
 
 
@@ -586,8 +600,8 @@ _SCHEDULERESPONSE = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=1091,
-  serialized_end=1177,
+  serialized_start=1126,
+  serialized_end=1212,
 )
 
 
@@ -676,6 +690,20 @@ _SLOTCOMMITREQUEST = _descriptor.Descriptor(
       message_type=None, enum_type=None, containing_type=None,
       is_extension=False, extension_scope=None,
       serialized_options=None, file=DESCRIPTOR,  create_key=_descriptor._internal_create_key),
+    _descriptor.FieldDescriptor(
+      name='uploadSize', full_name='service.SlotCommitRequest.uploadSize', index=11,
+      number=12, type=3, cpp_type=2, label=1,
+      has_default_value=False, default_value=0,
+      message_type=None, enum_type=None, containing_type=None,
+      is_extension=False, extension_scope=None,
+      serialized_options=None, file=DESCRIPTOR,  create_key=_descriptor._internal_create_key),
+    _descriptor.FieldDescriptor(
+      name='speed', full_name='service.SlotCommitRequest.speed', index=12,
+      number=13, type=1, cpp_type=5, label=1,
+      has_default_value=False, default_value=float(0),
+      message_type=None, enum_type=None, containing_type=None,
+      is_extension=False, extension_scope=None,
+      serialized_options=None, file=DESCRIPTOR,  create_key=_descriptor._internal_create_key),
   ],
   extensions=[
   ],
@@ -688,8 +716,8 @@ _SLOTCOMMITREQUEST = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=1180,
-  serialized_end=1375,
+  serialized_start=1215,
+  serialized_end=1445,
 )
 
 
@@ -741,8 +769,8 @@ _SLOTCOMMITRESPONSE = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=1377,
-  serialized_end=1459,
+  serialized_start=1447,
+  serialized_end=1529,
 )
 
 
@@ -780,8 +808,8 @@ _RECOVERREQUEST = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=1461,
-  serialized_end=1509,
+  serialized_start=1531,
+  serialized_end=1579,
 )
 
 
@@ -833,8 +861,8 @@ _RECOVERSLOTCHUNK = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=1511,
-  serialized_end=1584,
+  serialized_start=1581,
+  serialized_end=1654,
 )
 
 

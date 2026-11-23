@@ -11,10 +11,14 @@ host_key_script="generate_host_keys.py"
 
 NODES_NUM="${1:-}"
 if [[ -z "$NODES_NUM" ]]; then
-  echo "使用方法: $0 <NODES_NUM> [OUTPUT_DIR] [--stock-data PATH] [--stock-param PATH]"
+  echo "使用方法: $0 <NODES_NUM> [OUTPUT_DIR] [START_PORT] [PORT_INTERVAL] [START_NODE_ID] [--stock-data PATH] [--stock-param PATH]"
   echo "参数说明:"
   echo "  NODES_NUM    : 要生成的节点数量（正整数）"
   echo "  OUTPUT_DIR   : 节点输出目录（可选，默认为当前目录）"
+  echo "  START_PORT   : 起始端口号（可选，默认为 1234）"
+  echo "  PORT_INTERVAL: 端口间隔（可选，默认为 2）"
+  echo "  START_NODE_ID: 起始节点编号（可选，默认为 0）"
+  echo "  CHUNK_SIZE   : 每个分块的数据行数（可选，默认为 20）"
   echo "  --stock-data : ABM 股票真实输入数据目录（可选，默认 /root/rappa/stockdata）"
   echo "  --stock-param: ABM 离线调参参数目录（可选，默认 <stock-data>/params）"
   exit 1
@@ -72,11 +76,15 @@ done
 
 if [[ -z "$OUTPUT_DIR" ]]; then
   OUTPUT_DIR="$PWD"
-else
-  if [[ "$OUTPUT_DIR" != /* ]]; then
-    OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
-  fi
+elif [[ "$OUTPUT_DIR" != /* ]]; then
+  mkdir -p "$OUTPUT_DIR"
+  OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 fi
+
+START_PORT="${3:-1234}"
+PORT_INTERVAL="${4:-2}"
+START_NODE_ID="${5:-0}"
+CHUNK_SIZE="${6:-20}"
 
 if [[ "$STOCK_DATA_DIR" != /* ]]; then
   STOCK_DATA_DIR="$(cd "$STOCK_DATA_DIR" && pwd)"
@@ -89,6 +97,10 @@ fi
 
 echo "节点数量：$NODES_NUM"
 echo "输出路径：$OUTPUT_DIR"
+echo "起始端口：$START_PORT"
+echo "端口间隔：$PORT_INTERVAL"
+echo "起始编号：$START_NODE_ID"
+echo "分块大小：$CHUNK_SIZE"
 echo "ABM 股票真实输入目录：$STOCK_DATA_DIR"
 echo "ABM 离线参数目录：$STOCK_PARAM_DIR"
 echo "-----------------------------"
@@ -118,23 +130,31 @@ GENERATE_F=$(((NODES_NUM - 1) / 3))
 EC_PARAMS_N=$((2 * GENERATE_F + 1))
 EC_PARAMS_K=$((GENERATE_F + 1))
 
-for ((i = 0; i < NODES_NUM; i++)); do
-  node_folder="node${i}"
+MAX_JOBS=10
+for ((i = START_NODE_ID; i < START_NODE_ID + NODES_NUM; i++)); do
+  (
+    node_folder="node${i}"
 
-  if [[ -d "$node_folder" ]]; then
-    echo "节点 ${node_folder} 已存在，跳过创建。"
-    continue
-  fi
+    if [[ -d "$node_folder" ]]; then
+      echo "节点 ${node_folder} 已存在，跳过创建。"
+      exit 0
+    fi
 
-  echo "创建 ${node_folder}..."
-  mkdir -p "$node_folder"
-  cp -r "${code_path}" "${node_folder}/"
+    echo "创建 ${node_folder}..."
+    mkdir -p "$node_folder"
+    if command -v rsync >/dev/null 2>&1; then
+      rsync -a --exclude='nodes' --exclude='__pycache__' --exclude='.git' --exclude='model/TRADINGNET' "${code_path}/" "${node_folder}/${executor_dir_name}/"
+    else
+      cp -r "${code_path}" "${node_folder}/"
+      rm -rf "${node_folder}/${executor_dir_name}/__pycache__"
+      rm -rf "${node_folder}/${executor_dir_name}/model/TRADINGNET"
+    fi
 
-  node_repo_path="${node_folder}/${executor_dir_name}"
-  config_path="${node_repo_path}/config.json"
-  node_grpc_port=$((1234 + i * 2))
+    node_repo_path="${node_folder}/${executor_dir_name}"
+    config_path="${node_repo_path}/config.json"
+    node_grpc_port=$((START_PORT + (i - START_NODE_ID) * PORT_INTERVAL))
 
-  cat <<EOF >"$config_path"
+    cat <<EOF >"$config_path"
 {
   "NODE_ID": $i,
   "EC_PARAMS_N": $EC_PARAMS_N,
@@ -149,32 +169,40 @@ for ((i = 0; i < NODES_NUM; i++)); do
   "ABMStockParamDir": "$STOCK_PARAM_DIR",
   "IS_CUDA": true,
   "IS_RECOVERY": true,
+  "NUM_ROW_IN_CHUNK": $CHUNK_SIZE,
   "OTHER_NODE_GRPC_ADDRESSES": {
 EOF
 
-  for ((j = 0; j < NODES_NUM; j++)); do
-    if (( j == i )); then
-      continue
-    fi
-    other_grpc_port=$((1234 + j * 2))
-    cat <<EOF >>"$config_path"
+    for ((j = START_NODE_ID; j < START_NODE_ID + NODES_NUM; j++)); do
+      if (( j == i )); then
+        continue
+      fi
+      other_grpc_port=$((START_PORT + (j - START_NODE_ID) * PORT_INTERVAL))
+      cat <<EOF >>"$config_path"
     "$j": {
       "IP": "127.0.0.1",
       "PORT": $other_grpc_port
     },
 EOF
-  done
+    done
 
-  sed -i '$s/,//' "$config_path"
-  cat <<'EOF' >>"$config_path"
+    sed -i '$s/,//' "$config_path"
+    cat <<'EOF' >>"$config_path"
   }
 }
 EOF
 
-  cat <<EOF >"${node_folder}/start.sh"
+    cat <<EOF >"${node_folder}/start.sh"
 #!/bin/bash
 MODE="\$1"
+GPU_ID="\$2"
+
 cd "\$(dirname "\$0")/${executor_dir_name}" || exit 1
+
+if [ -n "\$GPU_ID" ]; then
+  export CUDA_VISIBLE_DEVICES="\$GPU_ID"
+  echo "节点 node${i}：分配使用 GPU \$GPU_ID"
+fi
 
 echo "启动节点：node${i}"
 if [ "\$MODE" = "--debug" ]; then
@@ -187,9 +215,9 @@ fi
 
 echo "\$!" > "../node.pid"
 EOF
-  chmod +x "${node_folder}/start.sh"
+    chmod +x "${node_folder}/start.sh"
 
-  cat <<EOF >"${node_folder}/stop.sh"
+    cat <<EOF >"${node_folder}/stop.sh"
 #!/bin/bash
 
 SHELL_FOLDER="\$(cd "\$(dirname "\$0")" && pwd)"
@@ -222,14 +250,21 @@ done
 echo "【WARN】停止 \${node_name} 超时，请手动检查或使用 kill -9。"
 exit 1
 EOF
-  chmod +x "${node_folder}/stop.sh"
+    chmod +x "${node_folder}/stop.sh"
 
-  echo "为 node${i} 生成密钥与证书..."
-  (
-    cd "$node_repo_path"
-    bash ./generate_key.sh
-  )
+    echo "为 node${i} 生成密钥与证书..."
+    (
+      cd "$node_repo_path"
+      bash ./generate_key.sh > /dev/null 2>&1
+    )
+    echo "节点 node${i} 创建并初始化完成。"
+  ) &
+
+  if (( (i + 1) % MAX_JOBS == 0 )); then
+    wait
+  fi
 done
+wait
 
 # 创建参数化的启动脚本
 cat <<'EOF' >"./start_para.sh"
@@ -242,6 +277,13 @@ MODE="${3:-}"
 
 # 获取节点数量
 NODES_NUM=$(find "$script_dir" -mindepth 1 -maxdepth 1 -type d -name "node*" | wc -l)
+
+# 检查 GPU 数量
+if command -v nvidia-smi &> /dev/null; then
+  GPU_COUNT=$(nvidia-smi -L | wc -l)
+else
+  GPU_COUNT=0
+fi
 
 usage() {
   echo "使用方法: $0 [PARALLEL] [TIMEOUT] [MODE]"
@@ -282,6 +324,11 @@ fi
 echo "并行度: $PARALLEL"
 echo "超时时间: ${TIMEOUT}秒"
 echo "总节点数: ${NODES_NUM}"
+if [ "$GPU_COUNT" -gt 0 ]; then
+  echo "检测到 GPU 数量: $GPU_COUNT，将按数量平分节点 GPU 启动。"
+else
+  echo "未检测到 GPU，将按默认方式启动。"
+fi
 echo "-----------------------------"
 
 if [ "$NODES_NUM" -eq 0 ]; then
@@ -350,6 +397,7 @@ wait_for_model_loading() {
 # 启动单个节点的函数
 start_single_node() {
   local node_id="$1"
+  local gpu_id="$2"
   local node_folder="node${node_id}"
   local node_start_script="${script_dir}/${node_folder}/start.sh"
 
@@ -358,8 +406,8 @@ start_single_node() {
     return 1
   fi
 
-  echo "启动节点：${node_folder}"
-  bash "$node_start_script" "$MODE" &
+  echo "启动节点：${node_folder} (GPU: ${gpu_id:-None})"
+  bash "$node_start_script" "$MODE" "$gpu_id" &
   local node_pid=$!
   
   # 等待节点模型加载完成
@@ -372,14 +420,26 @@ start_single_node() {
   fi
 }
 
+# 获取所有节点 ID
+node_ids=($(find "$script_dir" -mindepth 1 -maxdepth 1 -type d -name "node*" | sed 's/.*node//' | sort -n))
+
 # 按批次启动节点
 current_batch=()
 success_count=0
 fail_count=0
 
-for (( i=0; i<NODES_NUM; i++ )); do
+for i in "${!node_ids[@]}"; do
+  node_id="${node_ids[$i]}"
+  
+  # 计算 GPU ID
+  if [ "$GPU_COUNT" -gt 0 ]; then
+    gpu_id=$(( i % GPU_COUNT ))
+  else
+    gpu_id=""
+  fi
+
   # 启动当前节点
-  start_single_node "$i" &
+  start_single_node "$node_id" "$gpu_id" &
   current_batch+=($!)
   
   # 如果达到并行度，等待当前批次完成
@@ -425,24 +485,44 @@ cat <<EOF >"./start_all.sh"
 script_dir="\$(cd "\$(dirname "\$0")" && pwd)"
 MODE="\$1"
 
-if [ "\$MODE" = "--debug" ]; then
-  echo "并行启动所有节点 (调试模式)..."
-  echo "警告: 此脚本会同时启动所有节点，在无GPU环境下可能导致CPU过载！"
-  echo "推荐使用: ./start_para.sh [MODE] [PARALLEL] [TIMEOUT]"
+# 检查 GPU 数量
+if command -v nvidia-smi &> /dev/null; then
+  GPU_COUNT=\$(nvidia-smi -L | wc -l)
 else
-  echo "并行启动所有节点 (生产模式)..."
-  echo "警告: 此脚本会同时启动所有节点，在无GPU环境下可能导致CPU过载！"
-  echo "推荐使用: ./start_para.sh [MODE] [PARALLEL] [TIMEOUT]"
+  GPU_COUNT=0
 fi
 
-for (( i=0; i<${NODES_NUM}; i++ )); do
+if [ "\$GPU_COUNT" -gt 0 ]; then
+  echo "检测到 \$GPU_COUNT 个 GPU，将按数量平分节点 GPU 启动。"
+else
+  echo "未检测到 GPU，将按默认方式启动。"
+fi
+
+if [ "\$MODE" = "--debug" ]; then
+  echo "并行启动所有节点 (调试模式)..."
+else
+  echo "并行启动所有节点 (生产模式)..."
+fi
+echo "警告: 此脚本会同时启动所有节点，在无GPU环境下可能导致CPU过载！"
+echo "推荐使用: ./start_para.sh [MODE] [PARALLEL] [TIMEOUT]"
+
+for (( i=${START_NODE_ID}; i<${START_NODE_ID}+${NODES_NUM}; i++ )); do
+
   node_folder="node\${i}"
   node_start_script="\${script_dir}/\${node_folder}/start.sh"
 
   if [ -f "\$node_start_script" ]; then
     echo "-----------------------------"
     echo "启动节点：\${node_folder}"
-    bash "\$node_start_script" "\$MODE" &
+    
+    # 计算该节点使用的 GPU ID
+    if [ "\$GPU_COUNT" -gt 0 ]; then
+      GPU_ID=\$(( (i - ${START_NODE_ID}) % GPU_COUNT ))
+    else
+      GPU_ID=""
+    fi
+    
+    bash "\$node_start_script" "\$MODE" "\$GPU_ID" &
   else
     echo "-----------------------------"
     echo "【错误】未检测到节点\${i}的启动脚本: \$node_start_script"
@@ -462,7 +542,8 @@ script_dir="\$(cd "\$(dirname "\$0")" && pwd)"
 
 echo "开始停止所有节点..."
 
-for (( i=0; i<${NODES_NUM}; i++ )); do
+for (( i=${START_NODE_ID}; i<${START_NODE_ID}+${NODES_NUM}; i++ )); do
+
   node_folder="node\${i}"
   node_stop_script="\${script_dir}/\${node_folder}/stop.sh"
 

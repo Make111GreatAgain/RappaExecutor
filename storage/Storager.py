@@ -9,9 +9,6 @@ import networkx as nx
 import json
 import pandas as pd
 
-from config.config import BHExecutionNodeGlobalConfig
-# from django.contrib.messages.constants import SUCCESS
-
 from config.config import BHExecutionNodeGlobalConfig, STORE_METHOD_ENUM
 from logger.logger import logWriter as log
 from paradigm.channel import Channel
@@ -54,69 +51,58 @@ class Storager:
 
     def process_unprocess_slot(self):
         while True:
-            # Get a task from the task pool (blocking)
             if self.channel.to_storager_slot_channel.empty():
                 continue
             try:
                 packed_slot_output = self.channel.to_storager_slot_channel.get(timeout=1)
                 slot: CommitSlotItem = packed_slot_output[0]
                 output: ModelFormatOutput = packed_slot_output[1]
-                # commitment = self.compute_model_output_commitment(output) # 计算输出文件的承诺（和ec无关）
-                commitment: MerkleCommitment = self._commit_and_replicate(slot,
-                                                                          output.output)  # 这里要完成全部的任务： 1. commitment的计算; 2. 分发
+                commitment: MerkleCommitment = self._commit_and_replicate(slot, output.output)
                 slot.set_commitment(commitment.commitment)
             except Exception as e:
                 raise RuntimeError(e)
 
     def _commit_and_replicate(self, slot: CommitSlotItem, output):
-        # 如果是纠删码冗余存储
-        if BHExecutionNodeGlobalConfig.STORE_METHOD == STORE_METHOD_ENUM.EC:
+        method = BHExecutionNodeGlobalConfig.STORE_METHOD
+        if method == STORE_METHOD_ENUM.EC:
             return self._process_unprocess_slot_in_ec(slot, output)
-        # 如果是本地直接存储
-        if BHExecutionNodeGlobalConfig.STORE_METHOD == STORE_METHOD_ENUM.LOCAL:
-            return self._process_unprocess_slot_in_local(slot, output)
-        if BHExecutionNodeGlobalConfig.STORE_METHOD == STORE_METHOD_ENUM.REPLICAS:
+        if method in (STORE_METHOD_ENUM.LOCAL, STORE_METHOD_ENUM.HDFS):
+            return self._process_slot_standard(slot, output)
+        if method == STORE_METHOD_ENUM.REPLICAS:
             raise RuntimeError("Replicas Store has not been impl...")
 
-    """
-        NOTE: 本地存储，不考虑节点崩溃容错，性能上肯定是最好的，无需通信和编码
-        用于测试
-    """
-
-    # store_local 将分块存在本地，构建一个新的ReplicateChunk
-    def _store_local(self, replicate_package: ReplicatePackage):
-        # local_replicate_chunk = ReplicateChunk(col_index=col_index, chunk=chunk.chunk)
-        self.channel.to_receiver_chunk_store_channel.put(replicate_package)  # 交给receiver处理
-
-    def _process_unprocess_slot_in_local(self, slot: CommitSlotItem, output):
+    def _process_slot_standard(self, slot: CommitSlotItem, output):
+        method = BHExecutionNodeGlobalConfig.STORE_METHOD
         hasher = Hasher()
         chunker = Chunker(hasher=hasher)
-        chunks, commitment = chunker.chunk(output)  # 对输出进行分块，得到chunks和commitment
-        # 得到每个chunk的merkle proof
-        merkle_proofs = [commitment.open(chunk) for chunk in chunks]  # 这里的merkle proof考虑就是进行完整性的校验 todo 是否有必要？直接算一个哈希也行
+        chunks, commitment = chunker.chunk(output)
+        merkle_proofs = [commitment.open(chunk) for chunk in chunks]
         # signer 侧要求传入 256bit data hash，这里增量计算，避免拼接大字节串阻塞存储线程
         total_data_hasher = hashlib.sha256()
         for (row, chunk) in enumerate(chunks):
-            # record = ChunkReplicateRecord(signer=slot.signer, slot=slot.slot, slot_hash=slot.hash, index=row, nb_chunk=1, merkle_proof= merkle_proofs[row],padding_size=0)
-            # record.record_success_replicate(0, BHExecutionNodeGlobalConfig.NODE_IP)
             replicate_package = ReplicatePackage(sign=slot.sign, slot=slot.slot, row_index=row, store_col_index=0,
                                                  slot_hash=slot.hash, merkle_proof=merkle_proofs[row],
                                                  kzg_commitment=None, padding_size=0)
-            replicate_package.set_store_method(STORE_METHOD_ENUM.LOCAL)
+            replicate_package.set_store_method(method)
             serialized_df = self.chunk2json(chunk)
-            serialized_df_bytes = serialized_df.encode('utf-8')  # Convert JSON to bytes
+            serialized_df_bytes = serialized_df.encode('utf-8')
             replicate_chunk = ReplicateChunk(col_index=0, chunk=serialized_df_bytes)
             total_data_hasher.update(serialized_df_bytes)
             replicate_package.add_chunk(replicate_chunk)
-            self._store_local(replicate_package)  # 存在本地
-        # 存完以后这个slot被标记为processed
+            self.channel.to_receiver_chunk_store_channel.put(replicate_package)
+            if method == STORE_METHOD_ENUM.HDFS:
+                error = self.channel.to_storager_record_channel.get()
+                if error is not None:
+                    log.write_log("ERROR", f"Failed to store HDFS slot {slot.hash} chunk {row}: {error}")
+                    return commitment
+
         slot.sign_as_processed()
         slot.set_commitment(commitment=commitment.commitment)
         data_hash = total_data_hasher.digest()
         log.write_log(
             "STORAGE",
-            "slot {} local chunks prepared: {}, data hash bytes: {}".format(
-                slot.hash, len(chunks), len(data_hash)
+            "slot {} {} chunks prepared: {}, data hash bytes: {}".format(
+                slot.hash, method.name.lower(), len(chunks), len(data_hash)
             )
         )
         sign_start = time.time()
@@ -127,8 +113,6 @@ class Storager:
         )
         slot.set_nodeSign(signature)
         self.channel.to_slot_manager_channel.put(slot)
-        # collector 仅用于测试，不应阻塞 commit 主链路
-        self.channel.test_collect_output_channel.put((slot, output, 1))
         log.write_log("STORAGE",
                       "finish store the data from {}, commitment: {}".format(slot.hash, commitment.commitment))
         return commitment
@@ -233,8 +217,8 @@ class Storager:
         # TODO 这里还有接收其它块的逻辑
         process_1 = threading.Thread(target=self.process_unprocess_slot)
         process_1.start()
-        if BHExecutionNodeGlobalConfig.STORE_METHOD != STORE_METHOD_ENUM.LOCAL:
-            # 如果是本地存储，这个就不需要
+        method = BHExecutionNodeGlobalConfig.STORE_METHOD
+        if method not in (STORE_METHOD_ENUM.LOCAL, STORE_METHOD_ENUM.HDFS):
             process_2 = threading.Thread(target=self._waiting_slot_to_be_replicate)
             process_2.start()
 

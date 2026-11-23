@@ -72,11 +72,7 @@ class SlotManager:
                         # 传递给生成可信证明的dataProver todo @YZM
                         pass # 还没实现，暂时就先pass todo
                 if slot.is_finalized():
-                    # slot已经finalize,暂时没有额外逻辑
-                    # todo 这里暂时放一下测试collect的逻辑
-                    self.channel.test_collect_signal_channel.put(slot)
                     log.write_log("EXECUTION", "Update Finalized Slot, Sign: {}, Slot: {}, Hash: {}".format(slot.sign, slot.slot, slot.hash))
-                    pass
 
 
                 # 更新slot状态

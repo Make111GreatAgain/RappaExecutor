@@ -11,6 +11,7 @@ class STORE_METHOD_ENUM(Enum):
     LOCAL = auto()
     REPLICAS = auto()
     EC = auto()
+    HDFS = auto()
 
 # TODO @SD 这里需要全局的所有节点address和master本质上一样
 class BHExecutionNodeGlobalConfig:
@@ -64,9 +65,12 @@ class BHExecutionNodeGlobalConfig:
             cls.STORE_METHOD = STORE_METHOD_ENUM.LOCAL
         elif method == "replicas":
             cls.STORE_METHOD = STORE_METHOD_ENUM.REPLICAS
+        elif method == "hdfs":
+            cls.STORE_METHOD = STORE_METHOD_ENUM.HDFS
         else:
             # 默认为ec
             cls.STORE_METHOD = STORE_METHOD_ENUM.EC
+
     @classmethod
     def print_config(cls):
         """

@@ -30,7 +30,6 @@ class Channel:
                                             BHExecutionNodeGlobalConfig.IS_RECOVERY)
 
         self.test_collect_output_channel = manager.Queue()
-        self.test_collect_signal_channel = manager.Queue()
         self.test_collect_pass_receiver_channel = manager.Queue()
         self.test_collect_pass_grpc_channel = manager.Queue()
         self.test_replicate_mocker_executor_channel = manager.Queue()

@@ -20,7 +20,11 @@ from logger.logger import logWriter as log
 
 class SimpleReceiver:
     def __init__(self, channel: Channel):
-        self.storage_path = os.path.join(get_project_root(), BHExecutionNodeGlobalConfig.STORAGE_PATH) # 存储冗余数据块的路径
+        self.use_hdfs = BHExecutionNodeGlobalConfig.STORE_METHOD == STORE_METHOD_ENUM.HDFS
+        storage_path = BHExecutionNodeGlobalConfig.STORAGE_PATH
+        if not self.use_hdfs:
+            storage_path = os.path.join(get_project_root(), storage_path)
+        self.storage_path = storage_path
         log.write_log("INFO", "Init Storage Receiver from config, storage_path: {}".format(self.storage_path))
         # self.store_chunks: dict = {} # 存储 chunk，通过 slot_hash作为 key
         # self.store_chunk_channel = store_chunk_channel # 通过这一通道传递要存储的 slot
@@ -28,15 +32,18 @@ class SimpleReceiver:
 
 
     def _store_chunk(self, sign, slot, slot_hash, row_index, chunk_to_store: ReplicateChunk):
-        # ec_chunk里index代表索引，chunk是具体的 bytes
-        # 索引可以不记录在文件里，就单纯的记录在这里Receiver里，一旦节点崩溃，重启以后可以通过向 Master询问自己是第几个 # TODO @YZM 这个要在 master里加上
-        new_store_chunk_item = StoredChunk(sign=sign, slot=slot, slot_hash=slot_hash, row_index=row_index, storage_path=self.storage_path, chunk_to_store=chunk_to_store)
-        data_bytes = chunk_to_store.bytes() # 这里表示纠删码的冗余数据块，bytes直接落盘
-        new_store_chunk_item.store(data_bytes) # 存储纠删码
+        new_store_chunk_item = StoredChunk(
+            storage_path=self.storage_path,
+            sign=sign,
+            slot=slot,
+            slot_hash=slot_hash,
+            row_index=row_index,
+            chunk_to_store=chunk_to_store,
+            use_hdfs=self.use_hdfs,
+        )
+        data_bytes = chunk_to_store.bytes()
+        new_store_chunk_item.store(data_bytes)
         self.channel.update_store_chunk(slot_hash=slot_hash, new_store_chunk_item=new_store_chunk_item, row_index=row_index)
-        # if not self.channel.store_chunks.get(chunk_to_store.slot_hash):
-        #     self.channel.store_chunks[chunk_to_store.slot_hash] = Manager.dict()
-        # self.channel.store_chunks[chunk_to_store.slot_hash][chunk_to_store.row_index] = new_store_chunk_item
     def _load_chunk(self, slot_hash, row_index)->ErasureCodeChunk:
         # 读取根据 slot_hash来读取
         if not self.channel.store_chunks.get(slot_hash):
@@ -94,28 +101,40 @@ class SimpleReceiver:
                     self._store_chunk(sign=replicate_package.sign, slot=replicate_package.slot, slot_hash=replicate_package.slot_hash, row_index=replicate_package.row_index, chunk_to_store=chunk_to_store) #  todo 这里可以多开几个线程并行
                     log.write_log("STORAGE", "Receive slot {} chunk {}, commitment verify Success, finish store in local...".format(replicate_package.slot_hash, replicate_package.row_index))
 
-    """
-        NOTE: 如果收到的是本地存储的块，不需要分发，那么直接存就可以
-    """
-    def _store_local_chunks(self, replicate_package: ReplicatePackage):
-        chunks = replicate_package.chunks
-        # 这里只会有一个块，可以写的更好一点 todo
-        chunk_to_store = chunks[0]
-        self._store_chunk(sign=replicate_package.sign, slot=replicate_package.slot, slot_hash=replicate_package.slot_hash, row_index=replicate_package.row_index, chunk_to_store=chunk_to_store)
-        log.write_log("STORAGE", "Store slot {} chunk {} in local...".format(replicate_package.slot_hash, replicate_package.row_index))
+    def _store_standard_chunk(self, replicate_package: ReplicatePackage):
+        method = replicate_package.store_method
+        try:
+            self._store_chunk(
+                sign=replicate_package.sign,
+                slot=replicate_package.slot,
+                slot_hash=replicate_package.slot_hash,
+                row_index=replicate_package.row_index,
+                chunk_to_store=replicate_package.chunks[0],
+            )
+        except Exception as error:
+            if method != STORE_METHOD_ENUM.HDFS:
+                raise
+            self.channel.to_storager_record_channel.put(str(error))
+            return
+
+        if method == STORE_METHOD_ENUM.HDFS:
+            self.channel.to_storager_record_channel.put(None)
+        log.write_log(
+            "STORAGE",
+            f"Store slot {replicate_package.slot_hash} chunk {replicate_package.row_index} in {method.name.lower()}...",
+        )
 
     def process_chunks_to_store(self):
         while True:
-            # Get a task from the task pool (blocking)
             if self.channel.to_receiver_chunk_store_channel.empty():
                 continue
             try:
                 replicate_package: ReplicatePackage = self.channel.to_receiver_chunk_store_channel.get(timeout=0.01)
-                # 首先验证 package的各个 commitment
-                if replicate_package.store_method == STORE_METHOD_ENUM.EC:
+                method = replicate_package.store_method
+                if method == STORE_METHOD_ENUM.EC:
                     self._store_ec_chunks(replicate_package=replicate_package)
-                if replicate_package.store_method == STORE_METHOD_ENUM.LOCAL:
-                    self._store_local_chunks(replicate_package=replicate_package)
+                elif method in (STORE_METHOD_ENUM.LOCAL, STORE_METHOD_ENUM.HDFS):
+                    self._store_standard_chunk(replicate_package)
             except Exception as e:
                 raise RuntimeError(e)
     def process_chunks_to_load_test(self):

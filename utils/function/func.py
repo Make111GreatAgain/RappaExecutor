@@ -48,7 +48,7 @@ def parse_args():
         "--store",
         default="local",
         type=str,
-        help="Given file storage method: ec, local, replicas"
+        help="Given file storage method: ec, local, replicas, hdfs"
     )
     # add by zhmye
     # 这里将config.json作为参数传入

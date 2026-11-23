@@ -1,6 +1,13 @@
 import os
+import posixpath
+from contextlib import suppress
 from enum import Enum,auto
+from functools import lru_cache
 from typing import List
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
+from uuid import uuid4
+
+from pyarrow.fs import FileType, HadoopFileSystem
 
 from config.config import BHExecutionNodeGlobalConfig
 from paradigm.mod import ModelOutputType
@@ -15,51 +22,95 @@ from utils.cryptography.commitment.kzg.kzg_commitment import KZGCommitment
 # TODO: 这里目前是在内存里记录了所有的storedChunk并且它的路径是可以得到的，是否可以用数据库？不然节点down了怎么办
 
 
+@lru_cache(maxsize=8)
+def _hdfs_filesystem(endpoint):
+    return HadoopFileSystem.from_uri(endpoint)
+
+
 # 表示一个将被存储的文件块
 # 需要记录的是: 1. 是哪个任务的第几个slot; 2. 是第几个chunk; 3. 存储的路径是什么
 class StoredChunk:
-    def __init__(self, storage_path, sign, slot, slot_hash, row_index, chunk_to_store: ReplicateChunk):
+    def __init__(
+        self, storage_path, sign, slot, slot_hash, row_index, chunk_to_store: ReplicateChunk, *, use_hdfs=False
+    ):
         # self.node_id = node_id #这个不重要
         self.sign = sign
         self.slot = slot
         self.row_index = row_index
         self.col_index = chunk_to_store.col_index
         self.slot_hash = slot_hash # Master为每个 CommitSlotItem赋予了slot_hash，这里记录，方便作为索引
+        self.use_hdfs = use_hdfs
         self.store_path = self.generate_file_store_path(storage_path)
+
     def generate_file_store_path(self, storage_path):
-        # 构建分级存储路径
+        filename = f"{self.slot_hash}-row-{self.row_index}-{self.col_index}-chunk.slot"
+        if self.use_hdfs:
+            uri = urlsplit(os.fspath(storage_path))
+            root = posixpath.normpath(unquote(uri.path))
+            path = posixpath.normpath(posixpath.join(root, str(self.sign), str(self.slot), filename))
+            if not path.startswith(root.rstrip("/") + "/"):
+                raise OSError(f"HDFS chunk path is outside STORAGE_PATH: {path}")
+            return urlunsplit((uri.scheme, uri.netloc, quote(path), uri.query, ""))
+
         file_dir = os.path.join(storage_path, str(self.sign), str(self.slot))
-        file_path = os.path.join(file_dir, "{}-row-{}-{}-chunk.slot".format(self.slot_hash, self.row_index, self.col_index))
-
-        # 确保存储路径存在
         os.makedirs(file_dir, exist_ok=True)
-        return file_path
+        return os.path.join(file_dir, filename)
+
+    def _hdfs_location(self):
+        uri = urlsplit(self.store_path)
+        endpoint = urlunsplit((uri.scheme, uri.netloc, "/", uri.query, ""))
+        return _hdfs_filesystem(endpoint), unquote(uri.path)
+
+    def _existing_hdfs_chunk_matches(self, filesystem, path, data_bytes):
+        info = filesystem.get_file_info(path)
+        if info.type == FileType.NotFound:
+            return False
+        if info.type == FileType.File and info.size == len(data_bytes):
+            with filesystem.open_input_file(path) as file:
+                if file.read() == data_bytes:
+                    return True
+        raise FileExistsError(f"Chunk path already exists with different contents: {path}")
+
     def store(self, data_bytes):
-        # 写入文件
+        temporary_path = None
         try:
-            with open(self.store_path, "wb") as f:
-                # json.dump(chunk_data, f, ensure_ascii=False, indent=4)
-                f.write(data_bytes) # 直接写
-                f.close()
-        except Exception as e:
-            raise IOError(f"Failed to store chunk locally at { self.store_path }: {e}")
-        # 这里直接存储
-        pass
+            if not self.use_hdfs:
+                with open(self.store_path, "wb") as file:
+                    file.write(data_bytes)
+                return
+
+            filesystem, path = self._hdfs_location()
+            if self._existing_hdfs_chunk_matches(filesystem, path, data_bytes):
+                return
+
+            directory = posixpath.dirname(path)
+            filesystem.create_dir(directory, recursive=True)
+            temporary_path = posixpath.join(directory, f".{uuid4().hex}.tmp")
+            with filesystem.open_output_stream(temporary_path) as file:
+                file.write(data_bytes)
+            if self._existing_hdfs_chunk_matches(filesystem, path, data_bytes):
+                filesystem.delete_file(temporary_path)
+            else:
+                filesystem.move(temporary_path, path)
+        except Exception as error:
+            if temporary_path is not None:
+                with suppress(OSError):
+                    filesystem.delete_file(temporary_path)
+            raise OSError(f"Failed to store chunk at {self.store_path}: {error}") from error
+
     def load(self):
-        # 这里读取
-        # 写入文件
         try:
-            with open(self.store_path, "rb") as f:
-                # json.dump(chunk_data, f, ensure_ascii=False, indent=4)
-                data = f.read()
-                f.close()
-                return data
+            use_hdfs = getattr(self, "use_hdfs", None)
+            if use_hdfs is None:
+                use_hdfs = urlsplit(self.store_path).scheme == "hdfs"
+            if use_hdfs:
+                filesystem, path = self._hdfs_location()
+                with filesystem.open_input_file(path) as file:
+                    return file.read()
+            with open(self.store_path, "rb") as file:
+                return file.read()
         except Exception as e:
-            raise IOError(f"Failed to store chunk locally at { self.store_path }: {e}")
-        # 这里直接存储
-
-
-    # def set_slot_hash(self, slot_hash):
+            raise OSError(f"Failed to load chunk at {self.store_path}: {e}") from e
 
 
 """
